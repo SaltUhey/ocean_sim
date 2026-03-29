@@ -6,82 +6,78 @@ from mpl_toolkits.mplot3d import Axes3D
 import os
 
 # --- パス設定 ---
-PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-CSV_PATH = os.path.join(PROJECT_ROOT, 'data', 'uuv_initial_path.csv')
+PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+TX_CSV = os.path.join(PROJECT_ROOT, 'data', 'uuv_tx_trajectory.csv')
+RX_CSV = os.path.join(PROJECT_ROOT, 'data', 'uuv_rx_trajectory.csv')
 
-def run_matplotlib_animation():
+def run_dual_uuv_animation():
     # 1. データの読み込み
-    if not os.path.exists(CSV_PATH):
-        print(f"Error: File not found at {CSV_PATH}")
+    try:
+        df_tx = pd.read_csv(TX_CSV)
+        df_rx = pd.read_csv(RX_CSV)
+    except FileNotFoundError:
+        print("Error: TX or RX CSV file not found.")
         return
-    df = pd.read_csv(CSV_PATH)
-    times = df['time'].values
-    points = df[['x', 'y', 'z']].values
 
+    # データ長を揃える
+    min_len = min(len(df_tx), len(df_rx))
+    
     # 2. フィギュアと3D軸の設定
-    fig = plt.figure(figsize=(10, 8))
+    fig = plt.figure(figsize=(12, 8))
     ax = fig.add_subplot(111, projection='3d')
 
-    # 軸範囲の設定
-    ax.set_xlim(np.min(points[:, 0]) - 1, np.max(points[:, 0]) + 1)
-    ax.set_ylim(-5, 5) # Yは動かないが範囲を指定
-    ax.set_zlim(100, 0) # 深度方向に反転 (0が海面、100mが深い)
+    # 表示範囲の決定（両方のUUVをカバーする）
+    all_x = np.concatenate([df_tx['x'], df_rx['x']])
+    all_y = np.concatenate([df_tx['y'], df_rx['y']])
+    ax.set_xlim(np.min(all_x) - 5, np.max(all_x) + 5)
+    ax.set_ylim(np.min(all_y) - 5, np.max(all_y) + 5)
+    ax.set_zlim(100, 0) # 0を海面、100mを海底とする
 
     ax.set_xlabel('X [m]')
     ax.set_ylabel('Y [m]')
     ax.set_zlabel('Depth [m]')
-    ax.set_title('UUV Trajectory Animation')
+    ax.set_title('UUV Communication Simulation: TX vs RX')
 
-    # 3. アニメーション用のプロット要素（初期状態は空）
-    # UUVのカレント位置（点）
-    uuv_point, = ax.plot([], [], [], 'bo', markersize=10, label='Current UUV')
+    # 3. プロット要素の定義
+    # TX (送信側): 赤
+    line_tx, = ax.plot([], [], [], 'r--', alpha=0.3, label='TX Path')
+    uuv_tx, = ax.plot([], [], [], 'ro', markersize=10, label='TX (Source)')
     
-    # 軌跡（線）
-    trace_line, = ax.plot([], [], [], 'y-', linewidth=2, alpha=0.6, label='Trace')
+    # RX (受信側): 青
+    line_rx, = ax.plot([], [], [], 'b--', alpha=0.3, label='RX Path')
+    uuv_rx, = ax.plot([], [], [], 'bo', markersize=10, label='RX (Receiver)')
     
-    # 時刻表示のテキスト
-    time_text = ax.text2D(0.05, 0.95, '', transform=ax.transAxes)
+    # 通信距離を表示するテキスト
+    dist_text = ax.text2D(0.05, 0.90, '', transform=ax.transAxes)
+    ax.legend()
 
-    ax.legend(loc='upper right')
+    # 4. アニメーション更新関数
+    def update(frame):
+        # TXの更新
+        line_tx.set_data(df_tx['x'][:frame], df_tx['y'][:frame])
+        line_tx.set_3d_properties(df_tx['z'][:frame])
+        uuv_tx.set_data([df_tx['x'][frame]], [df_tx['y'][frame]])
+        uuv_tx.set_3d_properties([df_tx['z'][frame]])
 
-    # 4. アニメーションの更新関数（各フレームごとに呼ばれる）
-    def update(frame_num):
-        """
-        frame_num: 現在のフレーム番号 (0 から len(points)-1 まで)
-        """
-        # --- 軌跡（線）の更新 ---
-        # 0フレーム目から現在フレームまでの点をプロット
-        current_trace = points[:frame_num+1]
-        trace_line.set_data(current_trace[:, 0], current_trace[:, 1])
-        trace_line.set_3d_properties(current_trace[:, 2])
-        
-        # --- UUV位置（点）の更新 ---
-        current_pos = points[frame_num]
-        uuv_point.set_data([current_pos[0]], [current_pos[1]])
-        uuv_point.set_3d_properties([current_pos[2]])
-        
-        # --- テキストの更新 ---
-        current_time = times[frame_num]
-        time_text.set_text(f'Time: {current_time:.1f} s')
-        
-        # 更新した要素をリストで返す（blitting用）
-        return uuv_point, trace_line, time_text
+        # RXの更新
+        line_rx.set_data(df_rx['x'][:frame], df_rx['y'][:frame])
+        line_rx.set_3d_properties(df_rx['z'][:frame])
+        uuv_rx.set_data([df_rx['x'][frame]], [df_rx['y'][frame]])
+        uuv_rx.set_3d_properties([df_rx['z'][frame]])
 
-    # 5. アニメーションの実行
-    # interval: フレーム間の遅延時間（ミリ秒）。データの1秒刻みに合わせて1000ms。
-    ani = animation.FuncAnimation(fig, update, frames=len(df), 
-                                  interval=1000, blit=True, repeat=True)
+        # 2台間の直線距離を計算
+        pos_tx = np.array([df_tx['x'][frame], df_tx['y'][frame], df_tx['z'][frame]])
+        pos_rx = np.array([df_rx['x'][frame], df_rx['y'][frame], df_rx['z'][frame]])
+        distance = np.linalg.norm(pos_tx - pos_rx)
+        dist_text.set_text(f'Time: {df_tx["time"][frame]:.1f}s\nDistance: {distance:.2f} m')
 
-    # Jupyter Notebook上で表示する場合
-    try:
-        from IPython.display import HTML
-        # HTML5ビデオとして埋め込む（これが一番綺麗で見やすい）
-        display(HTML(ani.to_html5_video()))
-        plt.close() # 静止画のプロットを閉じる
-    except ImportError:
-        # Notebook環境でない場合は plt.show() でウィンドウを開く
-        print("Note: If you are in Jupyter, 'to_html5_video()' is recommended.")
-        plt.show()
+        return line_tx, uuv_tx, line_rx, uuv_rx, dist_text
+
+    # 5. アニメーション実行
+    # intervalはミリ秒単位。データが1秒刻みなら500〜1000程度が見やすいです。
+    ani = animation.FuncAnimation(fig, update, frames=min_len, interval=500, blit=False)
+
+    plt.show()
 
 if __name__ == "__main__":
-    run_matplotlib_animation()
+    run_dual_uuv_animation()
