@@ -13,13 +13,17 @@ if project_root not in sys.path:
     sys.path.insert(0, project_root)
 
 from utils.env_setup.env_tools import load_env_config
-from utils.motion.trajectory_visualizer import UUVVisualizer
+from utils.motion.visualizer import UUVVisualizer
 
 # --- パス設定 ---
 TX_CSV = os.path.join(project_root, 'data', 'uuv_tx_trajectory.csv')
 RX_CSV = os.path.join(project_root, 'data', 'uuv_rx_trajectory.csv')
 XML_CONFIG = os.path.join(project_root, 'data', 'env_config.xml')
 OUTPUT_CSV = os.path.join(project_root, 'data', 'propagation_results.csv')
+
+# --- 設定パラメータ ---
+RAY_UPDATE_INTERVAL = 5  # 音線の更新間隔（フレーム数）
+NUM_RAYS = 20           # 可視化する音線の本数（この値を調整して密度を変える）
 
 def run_simulation():
     # 1. データのロード
@@ -37,7 +41,8 @@ def run_simulation():
     viz = UUVVisualizer(
         x_limit=(np.min(all_x)-10, np.max(all_x)+10),
         y_limit=(np.min(all_y)-10, np.max(all_y)+10),
-        max_depth=env_cfg['max_depth']
+        max_depth=env_cfg['max_depth'],
+        title=f"UUV Acoustic Simulation"
     )
 
     # 3. アニメーション用更新関数
@@ -59,9 +64,33 @@ def run_simulation():
             bottom_absorption=env_cfg['bottom']['attenuation'],
             frequency=env_cfg['frequency']
         )
-        
+        env['nbeams'] = NUM_RAYS
+
+        # --- 伝搬損失（TL）計算（毎フレーム） ---
         tl_grid = pm.compute_transmission_loss(env, mode=pm.incoherent)
         current_tl = np.abs(tl_grid.iloc[0, 0])
+
+
+        # 古い音線を消去
+        for line in viz.ray_lines:
+            try:
+                line.remove()
+            except:
+                pass
+        # --- 音線（Ray Path）計算（数フレームに1回） ---
+        # RAY_UPDATE_INTERVAL フレームごとに実行
+        if frame % RAY_UPDATE_INTERVAL == 0:
+            # BELLHOPで音線を計算 (DataFrameのリストが返る)
+            print(f"[DEBUG] Frame {frame}: Computing {NUM_RAYS} rays for visualization...")
+            #rays = pm.compute_rays(env)
+            rays = pm.compute_eigenrays(env)
+            # print(rays)
+            # もし1本も到達していない場合は、空のリストが返る可能性があります
+            if rays is not None and len(rays) > 0:
+                viz.update_rays(rays, p_tx, p_rx)
+            else:
+                # 到達する音線がない場合は、古い線を消して何も表示しない
+                viz.update_rays([], p_tx, p_rx)
 
         # --- データの蓄積 ---
         simulation_log.append({
@@ -75,13 +104,19 @@ def run_simulation():
         # --- 描画更新 ---
         return viz.update(frame, df_tx, df_rx, current_tl, dist_h)
 
+    def init_viz():
+        # 何も返さない、あるいは背景要素の初期状態を返す
+        return []
+    
     # 4. アニメーション開始
     # repeat=False にして、終了時に保存処理が走るようにします
     ani = animation.FuncAnimation(
-        viz.fig, update_frame, frames=min_len, interval=200, blit=False, repeat=False
+        viz.fig, update_frame, init_func=init_viz, frames=min_len,
+        interval=500, #ms
+        blit=False, repeat=False
     )
     
-    print("Simulation started. The CSV will be saved when the animation finishes or the window is closed.")
+    print(f"Simulation started. Rays update every {RAY_UPDATE_INTERVAL} frames.")
     plt.show()
 
     # 5. CSV保存処理 (ウィンドウを閉じた後に実行)
