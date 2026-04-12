@@ -35,7 +35,7 @@ Underwater acoustic propagation simulation between two UUVs using BELLHOP via ar
 ## 🚀 Getting Started
 1. `data/env_config.xml` で海洋環境（水深、音速分布など）を設定します。
 2. `data/uuv_tx_trajectory.csv` および uuv_rx_trajectory.csv にUUVのシナリオデータを配置します。
-3. 'src/simulate_propagation.py' を実行すると、3Dアニメーションが開始され、終了後に伝搬データが保存されます。
+3. `src/simulate_propagation.py` を実行すると、3Dアニメーションが開始され、終了後に伝搬データが保存されます。
 
 ## ⚠️ License
 **All Rights Reserved.**
