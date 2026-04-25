@@ -14,6 +14,7 @@ if project_root not in sys.path:
 
 from utils.env_setup.env_tools import load_env_config
 from utils.motion.visualizer import UUVVisualizer
+from utils.tvir.tvir_calculator import TVIRCalculator
 
 # --- パス設定 ---
 TX_CSV = os.path.join(project_root, 'data', 'uuv_tx_trajectory.csv')
@@ -22,8 +23,8 @@ XML_CONFIG = os.path.join(project_root, 'data', 'env_config.xml')
 OUTPUT_CSV = os.path.join(project_root, 'data', 'propagation_results.csv')
 
 # --- 設定パラメータ ---
-RAY_UPDATE_INTERVAL = 5  # 音線の更新間隔（フレーム数）
-NUM_RAYS = 20           # 可視化する音線の本数（この値を調整して密度を変える）
+RAY_UPDATE_INTERVAL = 10  # 音線の更新間隔（フレーム数）
+NUM_RAYS = 50           # 可視化する音線の本数（この値を調整して密度を変える）
 
 def run_simulation():
     # 1. データのロード
@@ -34,6 +35,9 @@ def run_simulation():
 
     # 結果保存用のリスト
     simulation_log = []
+
+    # TVIR計算機の初期化
+    tvir_calc = TVIRCalculator()
 
     # 2. 可視化クラスの初期化
     all_x = np.concatenate([df_tx['x'], df_rx['x']])
@@ -70,6 +74,10 @@ def run_simulation():
         tl_grid = pm.compute_transmission_loss(env, mode=pm.incoherent)
         current_tl = np.abs(tl_grid.iloc[0, 0])
 
+        # TVIR用のArrivals計算（新規追加）
+        # 毎フレーム実行してデータを蓄積
+        arrivals = pm.compute_arrivals(env)
+        tvir_calc.add_frame(t, arrivals)
 
         # 古い音線を消去
         for line in viz.ray_lines:
@@ -112,12 +120,15 @@ def run_simulation():
     # repeat=False にして、終了時に保存処理が走るようにします
     ani = animation.FuncAnimation(
         viz.fig, update_frame, init_func=init_viz, frames=min_len,
-        interval=500, #ms
+        interval=1, #ms
         blit=False, repeat=False
     )
     
     print(f"Simulation started. Rays update every {RAY_UPDATE_INTERVAL} frames.")
     plt.show()
+
+    print("Generating TVIR Waterfall plot...")
+    tvir_calc.show_results(max_delay_ms=100) # 遅延時間の範囲は適宜調整
 
     # 5. CSV保存処理 (ウィンドウを閉じた後に実行)
     if simulation_log:

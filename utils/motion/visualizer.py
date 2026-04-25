@@ -65,7 +65,7 @@ class UUVVisualizer:
                                           arrow_length_ratio=0.3) # 矢印の頭のサイズ
         # テキスト更新
         self.info_text.set_text(
-            f'Time: {t:.1f}s\n'
+            f'Time: {t:.5f}s\n'
             f'Horizontal Range: {distance:.2f} m\n'
             f'Transmission Loss: {current_tl:.2f} dB'
         )

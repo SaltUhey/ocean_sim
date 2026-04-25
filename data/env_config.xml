@@ -3,7 +3,7 @@
     <Global>
         <MaxDepth unit="m">100.0</MaxDepth>
         <MaxRange unit="m">2000.0</MaxRange>
-        <Frequency unit="Hz">10000.0</Frequency> </Global>
+        <Frequency unit="Hz">5000.0</Frequency> </Global>
 
     <SSP>
         <Point depth="0.0">1530.0</Point>

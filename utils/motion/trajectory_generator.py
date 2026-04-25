@@ -49,4 +49,4 @@ if __name__ == "__main__":
         'x': 0.0, 'y': 0.0, 'z': 50.0,
         'roll': 0.0, 'pitch': 0.0, 'yaw': 0.0
     }
-    trajectory_generator('uuv_trajectory.csv', initial_condition, duration_sec=10, step_sec=1.0)
+    trajectory_generator('uuv_trajectory.csv', initial_condition, duration_sec=5, step_sec=(1/5000))
