@@ -9,8 +9,7 @@ Underwater acoustic propagation simulation between two UUVs using BELLHOP via ar
 - [x] Dynamic Path Integration: CSVから読み込んだ2台のUUV軌跡に基づく逐次シミュレーション
 - [x] Acoustic Solver Integration: `arlpy` を介した BELLHOP による伝搬損失（TL）の精密計算
 - [x] 3D Visualization: UUVの移動、航跡、および音線の描画
-- [ ] 送信波形・受信波形の出力
-- [ ] ドップラーシフトの考慮
+- [x] 送信波形・受信波形の出力
 
 ## 🛠 Tech Stack & Dependencies
 - **Language:** Python 3.10
