@@ -34,12 +34,22 @@ def load_env_config(xml_path):
         'attenuation': float(bottom_cfg.find('Attenuation').text)
     }
 
+    signal_cfg = root.find('Signal')
+    signal = {
+        'fs': float(signal_cfg.find('Fs').text),
+        'start_time': float(signal_cfg.find('StartTime').text),
+        'duration': float(signal_cfg.find('Duration').text)
+    }
+
+
+
     return {
         'max_depth': max_depth,
         'max_range': max_range,
         'frequency': frequency,
         'ssp': ssp,
-        'bottom': bottom
+        'bottom': bottom,
+        'signal': signal
     }
 
 # テスト用メイン処理

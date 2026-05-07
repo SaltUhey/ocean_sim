@@ -1,9 +1,17 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <OceanEnvironment name="Standard_Shallow_Water">
+
     <Global>
         <MaxDepth unit="m">100.0</MaxDepth>
         <MaxRange unit="m">2000.0</MaxRange>
-        <Frequency unit="Hz">5000.0</Frequency> </Global>
+        <Frequency unit="Hz">5000.0</Frequency> 
+    </Global>
+
+    <Signal>
+        <Fs unit="Hz">48000.0</Fs>
+        <StartTime unit="s">0.0</StartTime> <!-- 打ち出しタイミング -->
+        <Duration unit="s">5.0</Duration>  <!-- 打ち出し時間 -->
+    </Signal>
 
     <SSP>
         <Point depth="0.0">1530.0</Point>
@@ -17,4 +25,5 @@
         <Density unit="kg/m^3">1600.0</Density>
         <Attenuation unit="dB/wavelength">0.5</Attenuation>
     </Bottom>
+
 </OceanEnvironment>

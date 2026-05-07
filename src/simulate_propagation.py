@@ -15,6 +15,8 @@ if project_root not in sys.path:
 from utils.env_setup.env_tools import load_env_config
 from utils.motion.visualizer import UUVVisualizer
 from utils.tvir.tvir_calculator import TVIRCalculator
+from utils.signal.signal_generator import SignalGenerator
+from utils.signal.signal_synthesizer import SignalSynthesizer
 
 # --- パス設定 ---
 TX_CSV = os.path.join(project_root, 'data', 'uuv_tx_trajectory.csv')
@@ -24,7 +26,7 @@ OUTPUT_CSV = os.path.join(project_root, 'data', 'propagation_results.csv')
 
 # --- 設定パラメータ ---
 RAY_UPDATE_INTERVAL = 10  # 音線の更新間隔（フレーム数）
-NUM_RAYS = 50           # 可視化する音線の本数（この値を調整して密度を変える）
+NUM_RAYS = 100           # 可視化する音線の本数（この値を調整して密度を変える）
 
 def run_simulation():
     # 1. データのロード
@@ -129,6 +131,17 @@ def run_simulation():
 
     print("Generating TVIR Waterfall plot...")
     tvir_calc.show_results(max_delay_ms=100) # 遅延時間の範囲は適宜調整
+
+    #送信信号生成
+    gen = SignalGenerator(fs=env_cfg['signal']['fs'])
+    # XMLから読み込んだ値を想定
+    t_tx, s_tx = gen.generate_sin_wave(freq=env_cfg['frequency'], start_time=env_cfg['signal']['start_time'], duration=env_cfg['signal']['duration'], total_sim_time=10.0)
+
+    # 受信信号生成
+    synth = SignalSynthesizer(fs=env_cfg['signal']['fs'])
+    t_rx, s_rx = synth.synthesize(s_tx, tvir_calc.records)
+
+    synth.plot_comparison(t_rx, s_tx, s_rx)
 
     # 5. CSV保存処理 (ウィンドウを閉じた後に実行)
     if simulation_log:
