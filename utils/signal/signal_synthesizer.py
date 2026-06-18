@@ -1,82 +1,95 @@
 import numpy as np
-from scipy.interpolate import interp1d
+from scipy.interpolate import interp1d, interp2d, RegularGridInterpolator
 import matplotlib.pyplot as plt
 
 class SignalSynthesizer:
     def __init__(self, fs=48000.0):
         self.fs = fs
 
-    def synthesize(self, tx_signal, tvir_records):
+    def synthesize(self, tx_signal, tvir_records, max_delay_ms, delay_res_s=None):
         """
-        TVIRを用いて受信波形を合成する
+        送信波形をTVIRを畳み込んで受信波形を生成する
         """
         if not tvir_records:
             raise ValueError("TVIR records are empty.")
+        
+        if delay_res_s is None:
+            # Delay方向の解像度をサンプリング周期 (1/fs) に合わせる (最強の解像度)
+            delay_res_s = 1.0 / self.fs
 
         # 1. 準備：シミュレーション時間軸の抽出
         sim_times = np.array([r['sim_time'] for r in tvir_records])
+        max_delay_s = max_delay_ms/1000
+        delay_bins = np.arange(0, max_delay_s, delay_res_s)
+
+        # 複素数（振幅と位相情報）を保持するマトリクス (Time x Delay)
+        raw_matrix = np.zeros((len(sim_times), len(delay_bins)), dtype=complex)
+
+        for i, record in enumerate(tvir_records):
+            for d, amp in zip(record['delays'], record['amps']):
+                if d < max_delay_s:
+                    bin_idx = int(round(d / delay_res_s))
+                    if bin_idx < len(delay_bins):
+                        # BELLHOPの複素振幅をそのまま加算（干渉の再現のため）
+                        raw_matrix[i, bin_idx] += amp
+
+        print("Interpolating TVIR to sampling frequency level...")
+        # -------------------------------------------------------------
+        # STEP 2: 2次元補間関数の作成
+        # -------------------------------------------------------------
+        # RegularGridInterpolator を用いて、実部と虚部をそれぞれ補間
+        r_interp = RegularGridInterpolator((sim_times, delay_bins), np.real(raw_matrix), 
+                                           method='linear', bounds_error=False, fill_value=0.0)
+        i_interp = RegularGridInterpolator((sim_times, delay_bins), np.imag(raw_matrix), 
+                                           method='linear', bounds_error=False, fill_value=0.0)
+        
+        # 受信時間軸への完全アップサンプリング
         total_samples = len(tx_signal)
         t_rx = np.arange(total_samples) / self.fs
         rx_signal = np.zeros(total_samples)
 
-        # パスごとのデータを補間用に整理
-        # ※BELLHOPのパス数は変動するため、ここでは各フレームで最も強いN本のパスを
-        # 「パスID」として連続的に扱う簡易的な補間、または近傍参照を行います。
-        
-        # 簡略化のため、各サンプル時刻において「最も近いTVIRフレーム」の
-        # 遅延と振幅を適用する処理から始めます（これでも10fpsあれば十分動きます）
-        
-        print("Synthesizing received signal...")
-        
         # 効率化のため、送信信号の補間関数を作成（分数遅延対策）
         t_tx_orig = np.arange(len(tx_signal)) / self.fs
         s_interp = interp1d(t_tx_orig, tx_signal, kind='linear', 
                             bounds_error=False, fill_value=0.0)
-
-        # 全サンプルを回すと重いため、フレームごとにチャンク処理
-        for i in range(len(sim_times)):
-            # 現在のフレームの有効範囲（次のフレームまでの間）
-            t_start = sim_times[i]
-            t_end = sim_times[i+1] if i+1 < len(sim_times) else sim_times[i] + 0.1
+        
+        print("Synthesizing received signal...")
+        for j, tau in enumerate(delay_bins):
+            # このDelayにおける、全受信時刻 t_rx での複素振幅を一括補間
+            # グリッド点 (t_rx, tau) を作成
+            points = np.vstack([t_rx, np.full_like(t_rx, tau)]).T
             
-            mask = (t_rx >= t_start) & (t_rx < t_end)
-            t_chunk = t_rx[mask]
+            amp_r = r_interp(points)
+            amp_i = i_interp(points)
+            amp_mesh = amp_r + 1j * amp_i
             
-            if len(t_chunk) == 0:
-                continue
-                
-            # このフレームのパス情報を取得
-            delays = tvir_records[i]['delays']
-            amps = tvir_records[i]['amps']
+            # 遅延させた送信信号
+            t_lookup = t_rx - tau
+            s_delayed = s_interp(t_lookup)
             
-            chunk_result = np.zeros(len(t_chunk))
-            
-            for tau, amp in zip(delays, amps):
-                # 受信時刻 t において、送信側のどの時刻の音を拾うべきか
-                # t_lookup = t - tau
-                t_lookup = t_chunk - tau
-                
-                # 送信信号から値をサンプリングして振幅（複素数）をかける
-                # 物理的には実数部をとる
-                path_contribution = np.real(amp * s_interp(t_lookup))
-                chunk_result += path_contribution
-            
-            rx_signal[mask] = chunk_result
-
+            # 物理的な実数成分を足し合わせる
+            rx_signal += np.real(amp_mesh * s_delayed)
         return t_rx, rx_signal
-
+    
     def plot_comparison(self, t, tx, rx):
+        """送信信号と合成された受信信号の比較プロット"""
         plt.figure(figsize=(12, 6))
+        
+        # 上段：送信信号の全体像
         plt.subplot(2, 1, 1)
-        plt.plot(t, tx, label="Transmitted", alpha=0.7)
-        plt.title("Transmitted vs Received Signal")
-        plt.legend()
+        plt.plot(t, tx, label="Transmitted Signal", alpha=0.7)
+        plt.title("Comparison: Transmitted vs Received Signal")
+        plt.ylabel("Amplitude")
         plt.grid(True)
+        plt.legend()
 
+        # 下段：受信信号の全体像（伝搬損失で小さくなっているため、単体でスケールを合わせる）
         plt.subplot(2, 1, 2)
-        plt.plot(t, rx, label="Received", color='orange')
+        plt.plot(t, rx, label="Received Signal (Synthesized)", color='orange')
         plt.xlabel("Time [s]")
-        plt.legend()
+        plt.ylabel("Amplitude")
         plt.grid(True)
+        plt.legend()
+
         plt.tight_layout()
         plt.show()

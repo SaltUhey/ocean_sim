@@ -128,9 +128,10 @@ def run_simulation():
     
     print(f"Simulation started. Rays update every {RAY_UPDATE_INTERVAL} frames.")
     plt.show()
-
+    
     print("Generating TVIR Waterfall plot...")
-    tvir_calc.show_results(max_delay_ms=100) # 遅延時間の範囲は適宜調整
+    max_delay_ms=100
+    tvir_calc.show_results(max_delay_ms) # 遅延時間の範囲は適宜調整
 
     #送信信号生成
     gen = SignalGenerator(fs=env_cfg['signal']['fs'])
@@ -139,7 +140,7 @@ def run_simulation():
 
     # 受信信号生成
     synth = SignalSynthesizer(fs=env_cfg['signal']['fs'])
-    t_rx, s_rx = synth.synthesize(s_tx, tvir_calc.records)
+    t_rx, s_rx = synth.synthesize(s_tx, tvir_calc.records, max_delay_ms)
 
     synth.plot_comparison(t_rx, s_tx, s_rx)
 
