@@ -2,22 +2,23 @@
 <OceanEnvironment name="Standard_Shallow_Water">
 
     <Global>
-        <MaxDepth unit="m">100.0</MaxDepth>
+        <MaxDepth unit="m">500.0</MaxDepth>
         <MaxRange unit="m">2000.0</MaxRange>
-        <Frequency unit="Hz">5000.0</Frequency> 
+        <Frequency unit="Hz">15000.0</Frequency> 
     </Global>
 
     <Signal>
-        <Fs unit="Hz">48000.0</Fs>
+        <Fs unit="Hz">96000.0</Fs>
         <StartTime unit="s">0.0</StartTime> <!-- 打ち出しタイミング -->
-        <Duration unit="s">5.0</Duration>  <!-- 打ち出し時間 -->
+        <Duration unit="s">0.0010</Duration>  <!-- 打ち出し時間 -->
     </Signal>
 
     <SSP>
-        <Point depth="0.0">1530.0</Point>
-        <Point depth="20.0">1525.0</Point>
-        <Point depth="50.0">1515.0</Point>
+        <Point depth="0.0">1500.0</Point>
+        <Point depth="20.0">1500.0</Point>
+        <Point depth="50.0">1500.0</Point>
         <Point depth="100.0">1500.0</Point>
+        <Point depth="2000.0">1500.0</Point>
     </SSP>
 
     <Bottom>

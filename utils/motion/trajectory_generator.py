@@ -26,7 +26,7 @@ def trajectory_generator(filename, start_pos, duration_sec, step_sec):
     # --- データ生成ロジック ---
     times = np.arange(0, duration_sec + step_sec, step_sec)
     n_steps = len(times)
-    velocity_x = 1.5 # m/s
+    velocity_x = 0.0 # m/s
     
     data = {
         'time': times,
@@ -46,7 +46,7 @@ def trajectory_generator(filename, start_pos, duration_sec, step_sec):
 
 if __name__ == "__main__":
     initial_condition = {
-        'x': 0.0, 'y': 0.0, 'z': 50.0,
+        'x': 500.0, 'y': 0.0, 'z': 200.0,
         'roll': 0.0, 'pitch': 0.0, 'yaw': 0.0
     }
-    trajectory_generator('uuv_trajectory.csv', initial_condition, duration_sec=5, step_sec=(1/5000))
+    trajectory_generator('uuv_trajectory.csv', initial_condition, duration_sec=2.0, step_sec=(1/100))

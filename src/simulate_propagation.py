@@ -19,14 +19,14 @@ from utils.signal.signal_generator import SignalGenerator
 from utils.signal.signal_synthesizer import SignalSynthesizer
 
 # --- パス設定 ---
-TX_CSV = os.path.join(project_root, 'data', 'uuv_tx_trajectory.csv')
-RX_CSV = os.path.join(project_root, 'data', 'uuv_rx_trajectory.csv')
+TX_CSV = os.path.join(project_root, 'data', 'uuv_trajectory_tx_fre100Hz_static.csv')
+RX_CSV = os.path.join(project_root, 'data', 'uuv_trajectory_rx_fre100Hz_static.csv')
 XML_CONFIG = os.path.join(project_root, 'data', 'env_config.xml')
 OUTPUT_CSV = os.path.join(project_root, 'data', 'propagation_results.csv')
 
 # --- 設定パラメータ ---
 RAY_UPDATE_INTERVAL = 10  # 音線の更新間隔（フレーム数）
-NUM_RAYS = 100           # 可視化する音線の本数（この値を調整して密度を変える）
+NUM_RAYS = 0           # 可視化する音線の本数（この値を調整して密度を変える）
 
 def run_simulation():
     # 1. データのロード
@@ -130,7 +130,7 @@ def run_simulation():
     plt.show()
     
     print("Generating TVIR Waterfall plot...")
-    max_delay_ms=100
+    max_delay_ms=1000
     tvir_calc.show_results(max_delay_ms) # 遅延時間の範囲は適宜調整
 
     #送信信号生成
