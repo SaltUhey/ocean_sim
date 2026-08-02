@@ -1,10 +1,12 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <OceanEnvironment name="Standard_Shallow_Water">
 
+    <Method>PE</Method><!--BELLHOP or PE-->
+
     <Global>
         <MaxDepth unit="m">500.0</MaxDepth>
         <MaxRange unit="m">2000.0</MaxRange>
-        <Frequency unit="Hz">15000.0</Frequency> 
+        <Frequency unit="Hz">1000.0</Frequency> 
     </Global>
 
     <Signal>

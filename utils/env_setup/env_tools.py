@@ -12,6 +12,8 @@ def load_env_config(xml_path):
     tree = ET.parse(xml_path)
     root = tree.getroot()
 
+    method = str(root.find('Method').text)
+
     # 1. グローバル設定
     global_cfg = root.find('Global')
     max_depth = float(global_cfg.find('MaxDepth').text)
@@ -44,6 +46,7 @@ def load_env_config(xml_path):
 
 
     return {
+        'method': method,
         'max_depth': max_depth,
         'max_range': max_range,
         'frequency': frequency,

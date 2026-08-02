@@ -50,7 +50,7 @@ class TVIRCalculator:
         
         im = plt.imshow(matrix_db.T, extent=[sim_times[0], sim_times[-1], delay_bins[-1], 0],
                         aspect='auto', cmap='magma', interpolation='nearest',
-                        vmin=-60, vmax=matrix_db.max())
+                        vmin=-200, vmax=matrix_db.max())
         
         plt.colorbar(im, label='Relative Amplitude [dB]')
         plt.xlabel('Simulation Time [s]')
