@@ -7,12 +7,14 @@ class SignalSynthesizer:
     def __init__(self, fs=48000.0):
         self.fs = fs
 
-    def synthesize(self, tx_signal, tvir_records, max_delay_ms, delay_res_s=None):
+    def synthesize(self, tx_signal, tvir_records, max_delay_ms, freq, sim_method, delay_res_s=None):
         """
-        送信波形をTVIRと畳み込んで受信波形を生成する（arlpyパスバンド仕様・完全整合版）
+        送信波形をベースバンドに変換し、TVIRと畳み込んだ後にアップコンバートして受信波形を生成する
         """
         if not tvir_records:
             raise ValueError("TVIR records are empty.")
+        if sim_method not in ['BELLHOP', 'PE']:
+            raise ValueError("sim_method must be either 'BELLHOP' or 'PE'")
         
         if delay_res_s is None:
             delay_res_s = 1.0 / self.fs
@@ -23,47 +25,73 @@ class SignalSynthesizer:
         delay_bins = np.arange(0, max_delay_s, delay_res_s)
         n_delays = len(delay_bins)
 
-        # arlpyの複素振幅出力をそのまま複素マトリクスとして保持
         raw_matrix_c = np.zeros((len(sim_times), n_delays), dtype=complex)
 
-        for i, record in enumerate(tvir_records):
-            for d, amp in zip(record['delays'], record['amps']):
-                if d < max_delay_s:
-                    bin_idx = int(round(d / delay_res_s))
-                    if bin_idx < n_delays:
-                        raw_matrix_c[i, bin_idx] += amp
+        if sim_method == 'BELLHOP':
+            for i, record in enumerate(tvir_records):
+                for d, amp in zip(record['delays'], record['amps']):
+                    if d < max_delay_s:
+                        bin_idx = int(round(d / delay_res_s))
+                        if bin_idx < n_delays:
+                            raw_matrix_c[i, bin_idx] += amp
+
+        elif sim_method == 'PE':
+            # 【PE用】 連続的なベースバンド波形のリサンプリング（補間処理）
+            for i, record in enumerate(tvir_records):
+                pe_delays = np.array(record['delays'])
+                pe_amps = np.array(record['amps'])
+                
+                # 遅延時間が単調増加になるようにソート（補間関数のエラー回避）
+                sort_idx = np.argsort(pe_delays)
+                pe_delays_sorted = pe_delays[sort_idx]
+                pe_amps_sorted = pe_amps[sort_idx]
+                
+                # オーディオのサンプリング周波数(fs)のグリッドにマッピング
+                interp_func_delay = interp1d(
+                    pe_delays_sorted, pe_amps_sorted, 
+                    kind='linear', 
+                    bounds_error=False, 
+                    fill_value=0.0j  # 範囲外（波形が存在しない遅延帯）はゼロ埋め
+                )
+                raw_matrix_c[i, :] = interp_func_delay(delay_bins)
 
         total_samples = len(tx_signal)
         t_rx = np.arange(total_samples) / self.fs
-        rx_signal = np.zeros(total_samples)
         
-        # 送信信号の90度移相信号（虚数部）を作るためにヒルベルト変換を使用
-        tx_hilbert = hilbert(tx_signal)
-        s_tx_real = np.real(tx_hilbert)  # 元の送信信号 s(t)
-        s_tx_imag = np.imag(tx_hilbert)  # 90度移相した送信信号 s_hat(t)
+        print("Synthesizing in baseband and upconverting...")
+
+        # 2. 【ベースバンド変換】
+        # 送信信号の解析信号（アナリティックシグナル）を求めてから、
+        # exp(-j * 2 * pi * freq * t) を掛けてベースバンド（複素包絡線）に落とす
+        tx_analytic = hilbert(tx_signal)
+        tx_baseband = tx_analytic * np.exp(-1j * 2 * np.pi * freq * t_rx)
+
+        # 受信ベースバンド信号の初期化
+        rx_baseband = np.zeros(total_samples, dtype=complex)
         
-        print("Synthesizing received signal via arlpy passband formula...")
-        
+        # 3. 【ベースバンド同士の畳み込み】
         for j in range(n_delays):
             raw_amplitudes_at_delay = raw_matrix_c[:, j]
             if not np.any(raw_amplitudes_at_delay):
                 continue
                 
-            # 複素振幅のま目で時間軸補間を実行
+            # 複素振幅の時間軸補間（extrapolateで端の値を維持）
             interp_func = interp1d(sim_times, raw_amplitudes_at_delay, kind='linear', 
-                                   bounds_error=False, fill_value=0.0)
-            amp_at_delay = interp_func(t_rx)  # 型: complex (R + jI)
+                                   bounds_error=False, fill_value="extrapolate")
+            amp_at_delay = interp_func(t_rx)  # 複素振幅
             
-            # 遅延させた送信信号（実部と直交成分）をインデックスシフトで生成
-            s_delayed_real = np.zeros(total_samples)
-            s_delayed_imag = np.zeros(total_samples)
+            # ベースバンド信号のインデックスシフト（遅延表現）
+            # ベースバンドは変化が緩やかなため、整数シフトによる位相の乱れが起きにくい
+            s_delayed_bb = np.zeros(total_samples, dtype=complex)
             if j < total_samples:
-                s_delayed_real[j:] = s_tx_real[:total_samples - j]
-                s_delayed_imag[j:] = s_tx_imag[:total_samples - j]
+                s_delayed_bb[j:] = tx_baseband[:total_samples - j]
             
-            # 【真のパスバンド合成式】
-            # Re(Amp * s_complex) = Re(Amp)*Re(s) - Im(Amp)*Im(s)
-            rx_signal += np.real(amp_at_delay) * s_delayed_real - np.imag(amp_at_delay) * s_delayed_imag
+            # 複素振幅と遅延ベースバンド信号の足し合わせ
+            rx_baseband += amp_at_delay * s_delayed_bb
+
+        # 4. 【アップコンバート（パスバンドへ戻す）】
+        # exp(j * 2 * pi * freq * t) を掛けて、実部を取ることで元のキャリア周波数に戻す
+        rx_signal = np.real(rx_baseband * np.exp(1j * 2 * np.pi * freq * t_rx))
 
         print("Signal synthesis completed successfully.")
         return t_rx, rx_signal
@@ -75,14 +103,14 @@ class SignalSynthesizer:
         # 上段：送信信号の全体像
         plt.subplot(2, 1, 1)
         plt.plot(t, tx, label="Transmitted Signal", alpha=0.7)
-        plt.title("Comparison: Transmitted vs Received Signal")
+        plt.title("Comparison: Transmitted vs Received Signal (Baseband Convolved)")
         plt.ylabel("Amplitude")
         plt.grid(True)
         plt.legend()
 
         # 下段：受信信号の全体像
         plt.subplot(2, 1, 2)
-        plt.plot(t, rx, label="Received Signal (Synthesized)", color='orange')
+        plt.plot(t, rx, label="Received Signal (Upconverted)", color='orange')
         plt.xlabel("Time [s]")
         plt.ylabel("Amplitude")
         plt.grid(True)

@@ -12,7 +12,7 @@
     <Signal>
         <Fs unit="Hz">96000.0</Fs>
         <StartTime unit="s">0.0</StartTime> <!-- 打ち出しタイミング -->
-        <Duration unit="s">0.0010</Duration>  <!-- 打ち出し時間 -->
+        <Duration unit="s">0.003</Duration>  <!-- 打ち出し時間 -->
     </Signal>
 
     <SSP>
