@@ -1,130 +1,205 @@
 import numpy as np
-from scipy.interpolate import RectBivariateSpline
+from scipy.interpolate import RectBivariateSpline, UnivariateSpline
 from scipy.optimize import minimize
 from scipy.integrate import solve_ivp
 
 class VariationalAcousticSolver:
-    def __init__(self, ranges, depths, c_grid):
-        """
-        ranges: 距離グリッド (1D array)
-        depths: 深度グリッド (1D array)
-        c_grid: 音速の2次元配列 shape(len(ranges), len(depths))
-        """
-        # 2Dスプライン補間 (滑らかな音速場と空間微分を得るため)
-        self.ssp_spline = RectBivariateSpline(ranges, depths, c_grid)
-    
+    def __init__(self, ranges, depths, c_grid, bottom_depth=2000.0):
+        # データ点数に応じてスプラインの次数を調整
+        kx = min(3, len(ranges) - 1)
+        ky = min(3, len(depths) - 1)
+        
+        self.ssp_spline = RectBivariateSpline(ranges, depths, c_grid, kx=kx, ky=ky)
+        self.bottom_depth = bottom_depth
+        
     def get_c(self, r, z):
         return self.ssp_spline(r, z, grid=False)
     
     def get_grad_c(self, r, z):
-        # 音速の空間微分 (dc/dr, dc/dz)
         dc_dr = self.ssp_spline(r, z, dx=1, dy=0, grid=False)
         dc_dz = self.ssp_spline(r, z, dx=0, dy=1, grid=False)
         return dc_dr, dc_dz
 
-    def find_eigenray(self, start_pos, end_pos, num_nodes=20):
+    def _calc_travel_time(self, r_nodes, z_nodes):
+        """与えられた経路(r_nodes, z_nodes)の伝搬時間を計算"""
+        T = 0.0
+        for i in range(len(r_nodes) - 1):
+            r1, z1 = r_nodes[i], z_nodes[i]
+            r2, z2 = r_nodes[i+1], z_nodes[i+1]
+            r_mid, z_mid = (r1 + r2) / 2.0, (z1 + z2) / 2.0
+            c_mid = self.get_c(r_mid, z_mid)
+            ds = np.sqrt((r2 - r1)**2 + (z2 - z1)**2)
+            T += ds / c_mid
+        return T
+
+    def find_eigenray(self, start_pos, end_pos, topology="direct", num_nodes_per_seg=20):
         """
-        変分法による固有音線の探索
-        start_pos: (r_s, z_s), end_pos: (r_r, z_r)
+        topology: "direct" (直達), "surface" (海面1回), "bottom" (海底1回)
         """
         r_s, z_s = start_pos
         r_r, z_r = end_pos
-        
-        # 経路の r 座標を固定グリッドとして分割
-        self.r_nodes = np.linspace(r_s, r_r, num_nodes)
-        
-        # 初期パス（送信点と受信点を結ぶ直線）の z 座標
-        # ※ 最適化変数は両端を除く中間の z 座標のみ
-        z_init = np.linspace(z_s, z_r, num_nodes)[1:-1]
-        
-        # 目的関数（伝搬時間の線積分）
-        def objective(z_vars):
-            z_full = np.concatenate(([z_s], z_vars, [z_r]))
-            T = 0.0
-            for i in range(num_nodes - 1):
-                r1, z1 = self.r_nodes[i], z_full[i]
-                r2, z2 = self.r_nodes[i+1], z_full[i+1]
-                
-                # 中点での音速で近似
-                r_mid, z_mid = (r1 + r2) / 2.0, (z1 + z2) / 2.0
-                c_mid = self.get_c(r_mid, z_mid)
-                
-                ds = np.sqrt((r2 - r1)**2 + (z2 - z1)**2)
-                T += ds / c_mid
-            return T
 
-        # 準ニュートン法 (L-BFGS-B) で最適化
-        res = minimize(objective, z_init, method='L-BFGS-B', options={'disp': False})
-        
-        if not res.success:
-            print("Warning: Optimization failed.")
+        if topology == "direct":
+            r_nodes = np.linspace(r_s, r_r, num_nodes_per_seg)
+            z_init = np.linspace(z_s, z_r, num_nodes_per_seg)[1:-1]
             
-        optimal_z = np.concatenate(([z_s], res.x, [z_r]))
+            def objective(z_vars):
+                z_full = np.concatenate(([z_s], z_vars, [z_r]))
+                return self._calc_travel_time(r_nodes, z_full)
+                
+            res = minimize(objective, z_init, method='L-BFGS-B')
+            opt_z = np.concatenate(([z_s], res.x, [z_r]))
+            opt_r = r_nodes
+
+        elif topology == "surface":
+            # 変数: [反射点の距離 r_surf, 左セグメントのz, 右セグメントのz]
+            r_surf_init = (r_s + r_r) / 2.0
+            z_left_init = np.linspace(z_s, 0.0, num_nodes_per_seg)[1:-1]
+            z_right_init = np.linspace(0.0, z_r, num_nodes_per_seg)[1:-1]
+            init_vars = np.concatenate(([r_surf_init], z_left_init, z_right_init))
+            
+            def objective(vars):
+                r_surf = vars[0]
+                # 反射点が範囲外に出ないようペナルティ
+                if r_surf <= r_s or r_surf >= r_r: return 1e6 
+                
+                z_left_vars = vars[1:num_nodes_per_seg-1]
+                z_right_vars = vars[num_nodes_per_seg-1:]
+                
+                r_left = np.linspace(r_s, r_surf, num_nodes_per_seg)
+                z_left = np.concatenate(([z_s], z_left_vars, [0.0])) # 海面 z=0
+                
+                r_right = np.linspace(r_surf, r_r, num_nodes_per_seg)
+                z_right = np.concatenate(([0.0], z_right_vars, [z_r]))
+                
+                return self._calc_travel_time(r_left, z_left) + self._calc_travel_time(r_right, z_right)
+
+            res = minimize(objective, init_vars, method='L-BFGS-B')
+            r_surf = res.x[0]
+            opt_r = np.concatenate((np.linspace(r_s, r_surf, num_nodes_per_seg), 
+                                    np.linspace(r_surf, r_r, num_nodes_per_seg)[1:]))
+            opt_z = np.concatenate(([z_s], res.x[1:num_nodes_per_seg-1], [0.0], 
+                                    res.x[num_nodes_per_seg-1:], [z_r]))
+
+        elif topology == "bottom":
+            r_bot_init = (r_s + r_r) / 2.0
+            z_bot = self.bottom_depth
+            z_left_init = np.linspace(z_s, z_bot, num_nodes_per_seg)[1:-1]
+            z_right_init = np.linspace(z_bot, z_r, num_nodes_per_seg)[1:-1]
+            init_vars = np.concatenate(([r_bot_init], z_left_init, z_right_init))
+            
+            def objective(vars):
+                r_bot = vars[0]
+                if r_bot <= r_s or r_bot >= r_r: return 1e6
+                
+                z_left_vars = vars[1:num_nodes_per_seg-1]
+                z_right_vars = vars[num_nodes_per_seg-1:]
+                
+                r_left = np.linspace(r_s, r_bot, num_nodes_per_seg)
+                z_left = np.concatenate(([z_s], z_left_vars, [z_bot]))
+                
+                r_right = np.linspace(r_bot, r_r, num_nodes_per_seg)
+                z_right = np.concatenate(([z_bot], z_right_vars, [z_r]))
+                
+                return self._calc_travel_time(r_left, z_left) + self._calc_travel_time(r_right, z_right)
+
+            res = minimize(objective, init_vars, method='L-BFGS-B')
+            r_bot = res.x[0]
+            opt_r = np.concatenate((np.linspace(r_s, r_bot, num_nodes_per_seg), 
+                                    np.linspace(r_bot, r_r, num_nodes_per_seg)[1:]))
+            opt_z = np.concatenate(([z_s], res.x[1:num_nodes_per_seg-1], [z_bot], 
+                                    res.x[num_nodes_per_seg-1:], [z_r]))
+        else:
+            raise ValueError("Unknown topology")
+
         optimal_delay = res.fun
         
-        # AoD (Angle of Departure) と AoA (Angle of Arrival) の算出 (単位: rad)
-        # ※ 海面を0、下向きを正とする深度系での角度
-        aod = np.arctan2(optimal_z[1] - optimal_z[0], self.r_nodes[1] - self.r_nodes[0])
-        aoa = np.arctan2(optimal_z[-1] - optimal_z[-2], self.r_nodes[-1] - self.r_nodes[-2])
+        # --- AoA/AoD の算出 (隣接ノード間の直接微分) ---
+        # スプライン補間による端点の振動(ルンゲ現象)を避けるため、
+        # 最初のセグメントと最後のセグメントの傾きを直接計算します。
         
-        return self.r_nodes, optimal_z, optimal_delay, aod, aoa
+        dz_dr_start = (opt_z[1] - opt_z[0]) / (opt_r[1] - opt_r[0])
+        dz_dr_end = (opt_z[-1] - opt_z[-2]) / (opt_r[-1] - opt_r[-2])
 
-    def calculate_intensity(self, start_pos, end_pos, aod, d_theta=1e-4):
+        aod = np.arctan(dz_dr_start)
+        aoa = np.arctan(dz_dr_end)
+        
+        return opt_r, opt_z, optimal_delay, aod, aoa
+
+    def calculate_intensity(self, start_pos, end_pos, aod, topology="direct", d_theta=1e-4):
         """
-        論文に基づく微小角レイトレーシングによる強度計算
-        d_theta: 微小な射出角のズレ (rad)
+        反射トポロジーに応じた強度計算。
+        反射境界でスネルの法則(反射角=入射角)を適用して伝搬を継続する。
         """
         r_s, z_s = start_pos
         r_r, z_r = end_pos
         
-        # 距離 r を独立変数とした音線の連立微分方程式
         def ray_equations(r, y):
             z, theta = y
             c = self.get_c(r, z)
             dc_dr, dc_dz = self.get_grad_c(r, z)
-            
             dz_dr = np.tan(theta)
-            # スネルの法則の微分形 (r媒介変数版)
             dtheta_dr = (dc_dz - np.tan(theta) * dc_dr) / c
             return [dz_dr, dtheta_dr]
 
-        # 微小角をズラして発射
+        # 境界でのイベント検知 (ode_ivp用)
+        def hit_surface(r, y): return y[0] - 0.0
+        hit_surface.terminal = True
+        
+        def hit_bottom(r, y): return y[0] - self.bottom_depth
+        hit_bottom.terminal = True
+
         theta_perturbed = aod + d_theta
+        current_r = r_s
+        current_z = z_s
+        current_theta = theta_perturbed
         
-        # ODEソルバーで受信点の距離 r_r まで計算
-        sol = solve_ivp(ray_equations, [r_s, r_r], [z_s, theta_perturbed], 
-                        t_eval=[r_r], method='RK45')
+        # 反射に応じたシミュレーションループ
+        if topology == "direct":
+            events = []
+        elif topology == "surface":
+            events = [hit_surface]
+        elif topology == "bottom":
+            events = [hit_bottom]
+
+        sol = solve_ivp(ray_equations, [current_r, r_r], [current_z, current_theta], 
+                        events=events, dense_output=True, method='RK45')
         
-        if not sol.success:
-            return 0.0 # 計算失敗時は強度0
+        # 反射が発生した場合、角度を反転させて再スタート
+        if sol.status == 1: # イベント(反射)検知で停止
+            current_r = sol.t[-1]
+            current_z = sol.y[0][-1]
+            current_theta = -sol.y[1][-1] # 角度反転 (反射)
             
-        z_perturbed = sol.y[0][0]
-        
-        # 断面積の広がり ΔL (受信点における到達深度のズレ)
+            # 残りの距離を受信点まで進む
+            sol2 = solve_ivp(ray_equations, [current_r, r_r], [current_z, current_theta], 
+                             method='RK45', t_eval=[r_r])
+            z_perturbed = sol2.y[0][-1]
+        else:
+            # 反射指定なのに境界に当たらずに到達した場合、または直達波
+            z_perturbed = sol.y[0][-1]
+            
         delta_L = abs(z_perturbed - z_r)
-        
-        if delta_L < 1e-8:
-            delta_L = 1e-8 # ゼロ除算防止
+        if delta_L < 1e-8: delta_L = 1e-8
             
-        # 論文の公式に基づく信号強度係数 (円筒減衰 + 音線管面積)
-        # intensity = (1.0 * 1.0 / r_r) * cos(theta) * (d_theta / delta_L)
-        # ※ ここでは基準距離(1m)における強度を1とする
         intensity = (1.0 / r_r) * np.cos(aod) * (d_theta / delta_L)
         
+        # 反射係数による損失 (簡易的に1回あたり-3dB = パワー半減とする。必要に応じて複素係数に変更)
+        if topology in ["surface", "bottom"]:
+            intensity *= 0.5 
+            
         return intensity
 
 # --- テスト実行 ---
 if __name__ == "__main__":
-    # 1. 2D環境データのモック作成
     ranges = np.array([0.0, 500.0, 1000.0, 1500.0, 2000.0])
     depths = np.array([0.0, 20.0, 100.0, 2000.0])
-    
     # c_grid = np.array([
-    #     [1500.0, 1495.0, 1490.0, 1510.0],  # range=0.0
-    #     [1502.5, 1496.5, 1491.0, 1512.5],  # range=500.0
-    #     [1505.0, 1498.0, 1492.0, 1515.0],  # range=1000.0
-    #     [1507.5, 1499.5, 1493.0, 1517.5],  # range=1500.0
-    #     [1510.0, 1501.0, 1494.0, 1520.0]   # range=2000.0
+    #     [1500.0, 1495.0, 1490.0, 1510.0],
+    #     [1502.5, 1496.5, 1491.0, 1512.5],
+    #     [1505.0, 1498.0, 1492.0, 1515.0],
+    #     [1507.5, 1499.5, 1493.0, 1517.5],
+    #     [1510.0, 1501.0, 1494.0, 1520.0]
     # ])
 
     c_grid = np.array([
@@ -135,23 +210,25 @@ if __name__ == "__main__":
         [1500.0, 1500.0, 1500.0, 1500.0]   # range=2000.0
     ])
     
-    solver = VariationalAcousticSolver(ranges, depths, c_grid)
+    solver = VariationalAcousticSolver(ranges, depths, c_grid, bottom_depth=1500.0)
     
-    start_pos = (0.0, 50.0)    # 送信点 (r, z)
-    end_pos = (1500.0, 200.0)  # 受信点 (r, z)
+    start_pos = (0.0, 50.0)    
+    end_pos = (1500.0, 200.0)  
     
-    # 2. 変分法による固有音線探索
-    r_path, z_path, delay, aod, aoa = solver.find_eigenray(start_pos, end_pos, num_nodes=50)
+    topologies = ["direct", "surface", "bottom"]
     
-    # 3. 音線管の断面積に基づく強度計算
-    intensity = solver.calculate_intensity(start_pos, end_pos, aod)
-    
-    # 4. TVIR用のフォーマット化
-    amplitude = np.sqrt(intensity) # パワーから振幅へ変換
-    
-    print(f"--- Eigenray Optimization Results ---")
-    print(f"Delay (s):       {delay:.4f}")
-    print(f"AoD (deg):       {np.rad2deg(aod):.4f}")
-    print(f"AoA (deg):       {np.rad2deg(aoa):.4f}")
-    print(f"Intensity coeff: {intensity:.4e}")
-    print(f"Amplitude:       {amplitude:.4e}")
+    for topo in topologies:
+        print(f"\n--- Topology: {topo.upper()} ---")
+        try:
+            r_path, z_path, delay, aod, aoa = solver.find_eigenray(start_pos, end_pos, topology=topo, num_nodes_per_seg=30)
+            intensity = solver.calculate_intensity(start_pos, end_pos, aod, topology=topo)
+            amplitude = np.sqrt(intensity)
+            
+            print(f"Delay (s):       {delay:.4f}")
+            print(f"AoD (deg):       {np.rad2deg(aod):.4f}")
+            print(f"AoA (deg):       {np.rad2deg(aoa):.4f}")
+            print(f"Intensity coeff: {intensity:.4e}")
+            print(f"Amplitude:       {amplitude:.4e}")
+            
+        except Exception as e:
+            print(f"Calculation failed: {e}")
