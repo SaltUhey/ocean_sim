@@ -2,6 +2,7 @@ import numpy as np
 from scipy.interpolate import RectBivariateSpline, UnivariateSpline
 from scipy.optimize import minimize
 from scipy.integrate import solve_ivp
+import matplotlib.pyplot as plt  # 追加
 
 class VariationalAcousticSolver:
     def __init__(self, ranges, depths, c_grid, bottom_depth=2000.0):
@@ -115,9 +116,6 @@ class VariationalAcousticSolver:
         optimal_delay = res.fun
         
         # --- AoA/AoD の算出 (隣接ノード間の直接微分) ---
-        # スプライン補間による端点の振動(ルンゲ現象)を避けるため、
-        # 最初のセグメントと最後のセグメントの傾きを直接計算します。
-        
         dz_dr_start = (opt_z[1] - opt_z[0]) / (opt_r[1] - opt_r[0])
         dz_dr_end = (opt_z[-1] - opt_z[-2]) / (opt_r[-1] - opt_r[-2])
 
@@ -184,38 +182,56 @@ class VariationalAcousticSolver:
             
         intensity = (1.0 / r_r) * np.cos(aod) * (d_theta / delta_L)
         
-        # 反射係数による損失 (簡易的に1回あたり-3dB = パワー半減とする。必要に応じて複素係数に変更)
         if topology in ["surface", "bottom"]:
             intensity *= 0.5 
             
         return intensity
 
-# --- テスト実行 ---
+# --- テスト実行およびプロット ---
 if __name__ == "__main__":
     ranges = np.array([0.0, 500.0, 1000.0, 1500.0, 2000.0])
     depths = np.array([0.0, 20.0, 100.0, 2000.0])
-    # c_grid = np.array([
-    #     [1500.0, 1495.0, 1490.0, 1510.0],
-    #     [1502.5, 1496.5, 1491.0, 1512.5],
-    #     [1505.0, 1498.0, 1492.0, 1515.0],
-    #     [1507.5, 1499.5, 1493.0, 1517.5],
-    #     [1510.0, 1501.0, 1494.0, 1520.0]
-    # ])
-
     c_grid = np.array([
-        [1500.0, 1500.0, 1500.0, 1500.0],  # range=0.0
-        [1500.0, 1500.0, 1500.0, 1500.0],  # range=500.0
-        [1500.0, 1500.0, 1500.0, 1500.0],  # range=1000.0
-        [1500.0, 1500.0, 1500.0, 1500.0],  # range=1500.0
-        [1500.0, 1500.0, 1500.0, 1500.0]   # range=2000.0
+        [1500.0, 1495.0, 1490.0, 1510.0],
+        [1502.5, 1496.5, 1491.0, 1512.5],
+        [1505.0, 1498.0, 1492.0, 1515.0],
+        [1507.5, 1499.5, 1493.0, 1517.5],
+        [1510.0, 1501.0, 1494.0, 1520.0]
     ])
+
+    # c_grid = np.array([
+    #     [1500.0, 1500.0, 1500.0, 1500.0],  # range=0.0
+    #     [1500.0, 1500.0, 1500.0, 1500.0],  # range=500.0
+    #     [1500.0, 1500.0, 1500.0, 1500.0],  # range=1000.0
+    #     [1500.0, 1500.0, 1500.0, 1500.0],  # range=1500.0
+    #     [1500.0, 1500.0, 1500.0, 1500.0]   # range=2000.0
+    # ])
     
-    solver = VariationalAcousticSolver(ranges, depths, c_grid, bottom_depth=1500.0)
+    bottom_depth = 1500.0
+    solver = VariationalAcousticSolver(ranges, depths, c_grid, bottom_depth=bottom_depth)
     
     start_pos = (0.0, 50.0)    
     end_pos = (1500.0, 200.0)  
     
     topologies = ["direct", "surface", "bottom"]
+    
+    # プロットのセットアップ
+    fig, ax = plt.subplots(figsize=(10, 6))
+    
+    # 1. 音速プロファイルの背景コンタープロット
+    # c_gridの形状(len(ranges), len(depths))に合わせるため転置してプロット
+    c_contour = ax.contourf(ranges, depths, c_grid.T, levels=30, cmap='viridis', alpha=0.8)
+    cbar = plt.colorbar(c_contour, ax=ax)
+    cbar.set_label('Sound Speed (m/s)')
+    
+    # 2. 送受波器と境界のプロット
+    ax.plot(start_pos[0], start_pos[1], 'r^', markersize=10, label='Tx (Start)')
+    ax.plot(end_pos[0], end_pos[1], 'r*', markersize=12, label='Rx (End)')
+    ax.axhline(0, color='blue', linestyle='-', linewidth=2, label='Surface')
+    ax.axhline(bottom_depth, color='brown', linestyle='--', linewidth=2, label='Bottom')
+    
+    # プロット用のカラー設定
+    colors = {"direct": "white", "surface": "cyan", "bottom": "orange"}
     
     for topo in topologies:
         print(f"\n--- Topology: {topo.upper()} ---")
@@ -230,5 +246,20 @@ if __name__ == "__main__":
             print(f"Intensity coeff: {intensity:.4e}")
             print(f"Amplitude:       {amplitude:.4e}")
             
+            # 3. 計算された軌跡のプロット
+            ax.plot(r_path, z_path, color=colors[topo], linewidth=2, label=f'{topo.capitalize()} Path')
+            
         except Exception as e:
-            print(f"Calculation failed: {e}")
+            print(f"Calculation failed for {topo}: {e}")
+
+    # 軸の設定 (海面を上にするためY軸を反転)
+    ax.set_title('Acoustic Ray Paths & Sound Speed Profile (Variational Method)')
+    ax.set_xlabel('Range (m)')
+    ax.set_ylabel('Depth (m)')
+    ax.set_xlim([ranges[0], ranges[-1]])
+    ax.set_ylim([bottom_depth + 100, -50]) # 少しマージンを持たせて反転
+    ax.legend(loc='upper right')
+    ax.grid(True, linestyle=':', alpha=0.7)
+    
+    plt.tight_layout()
+    plt.show()
