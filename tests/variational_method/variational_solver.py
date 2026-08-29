@@ -6,10 +6,8 @@ import matplotlib.pyplot as plt  # 追加
 
 class VariationalAcousticSolver:
     def __init__(self, ranges, depths, c_grid, bottom_depth=2000.0):
-        # データ点数に応じてスプラインの次数を調整
         kx = min(3, len(ranges) - 1)
         ky = min(3, len(depths) - 1)
-        
         self.ssp_spline = RectBivariateSpline(ranges, depths, c_grid, kx=kx, ky=ky)
         self.bottom_depth = bottom_depth
         
