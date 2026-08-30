@@ -146,8 +146,8 @@ def run_trajectory_comparison():
     num_beams = 101
     test_angles = np.linspace(angle_min, angle_max, num_beams) 
     
-    base_depths = np.array([0.0, 20.0, 100.0, 2000.0])
-    base_ssp = np.array([1500.0, 1495.0, 1490.0, 1510.0])
+    base_depths = np.array([0.0, 20.0, 100.0, 500.0, 2000.0])
+    base_ssp = np.array([1510.0, 1490.0, 1470.0, 1500.0, 1530.0])
     
     ssp_1d_arlpy = np.column_stack((base_depths, base_ssp))
     env = pm.create_env2d(

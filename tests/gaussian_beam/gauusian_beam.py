@@ -191,7 +191,7 @@ def run_test():
     depths = np.array([0.0, 20.0, 100.0, 500, 2000.0])
     
     # 屈折が視覚的に分かりやすいよう、サウンドチャネルをやや強調
-    base_ssp = [1510.0, 1490.0, 1470.0, 1500, 1530.0]
+    base_ssp = [1510.0, 1490.0, 1470.0, 1500.0, 1530.0]
     c_grid = np.array([base_ssp, base_ssp, base_ssp, base_ssp])
      # c_grid = np.array([base_ssp, [1512.0, 1492.0, 1472.0, 1500, 1532.0], base_ssp, base_ssp])
     
@@ -199,13 +199,14 @@ def run_test():
     bottom_depths = np.array([1500.0, 1500.0, 1500.0, 1500.0])
     
     start_pos = (0.0, 50.0)
-    end_pos = (2000.0, 100.0)
+    end_pos = (2000.0, 200.0)
     target_range = 2500.0
     
     model = GaussianBeamPropagator(ranges, depths, c_grid, bottom_ranges, bottom_depths, freq=1000.0)
-    
-    # ダクトを捉えるため、やや浅い角度を中心に放射
-    test_angles = np.linspace(-12, 12, 19) 
+
+    angle_min, angle_max = -70, 70
+    num_beams = 101
+    test_angles = np.linspace(angle_min, angle_max, num_beams) 
     
     fig, ax = plt.subplots(figsize=(10, 6))
     
