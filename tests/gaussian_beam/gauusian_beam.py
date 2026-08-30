@@ -2,71 +2,61 @@ import numpy as np
 import matplotlib.pyplot as plt
 from matplotlib.lines import Line2D
 from scipy.integrate import solve_ivp
-from scipy.interpolate import interp1d, RectBivariateSpline
+from scipy.interpolate import interp1d, RegularGridInterpolator, RectBivariateSpline
 
 class GaussianBeamPropagator:
     def __init__(self, ranges, depths, c_grid, bottom_ranges, bottom_depths, freq=1000.0):
-        """
-        ranges: 距離の配列 (m)
-        depths: 深度の配列 (m)
-        c_grid: 2D音速プロファイル (m/s)
-        bottom_ranges, bottom_depths: 海底地形データ (m)
-        freq: 音源周波数 (Hz) - 振幅（ビーム幅）計算に使用
-        """
-        self.c_spline = RectBivariateSpline(ranges, depths, c_grid, kx=1, ky=1)
+        # 軌跡の屈折とビーム幅計算のため、滑らかな2階微分を保証する3次スプライン(kx=3, ky=3)を使用
+        self.r_min, self.r_max = ranges[0], ranges[-1]
+        self.z_min, self.z_max = depths[0], depths[-1]
+       # 1. 距離と水深の高密度グリッドを生成 (例: 距離50m刻み, 水深5m刻み)
+        r_dense = np.arange(self.r_min, self.r_max + 0.1, 50.0)
+        z_dense = np.arange(self.z_min, self.z_max + 0.1, 5.0)
+        
+        # 2. 元の粗いデータから線形補間関数を作成
+        lin_interp = RegularGridInterpolator((ranges, depths), c_grid, method='linear')
+        
+        # 3. 高密度グリッド上の音速場を計算
+        R_dense, Z_dense = np.meshgrid(r_dense, z_dense, indexing='ij')
+        c_grid_dense = lin_interp((R_dense, Z_dense))
+        
+        # 4. 高密度データに対して3次スプライン(kx=3, ky=3)を構築
+        self.c_spline = RectBivariateSpline(r_dense, z_dense, c_grid_dense, kx=3, ky=3)
+        
         self.bottom_func = interp1d(bottom_ranges, bottom_depths, kind='linear', fill_value="extrapolate")
         self.bottom_dzdr = 0.1 
         self.freq = freq
         self.omega = 2.0 * np.pi * freq
 
     def get_c_and_gradients(self, r, z):
-        """位置(r, z)における音速c、1階偏微分、および2階偏微分を取得"""
-        c = self.c_spline(r, z, grid=False).item()
+        """位置(r, z)における音速c、1階偏微分、および2階偏微分をスプラインの解析的微分から取得"""
+        # ODEソルバが一時的に領域外へステップした際、3次関数の発散を防ぐためのクリッピング
+        r_clip = max(self.r_min, min(r, self.r_max))
+        z_clip = max(self.z_min, min(z, self.z_max))
         
-        dr = 0.1
-        dz = 0.1
+        # 有限差分による数値ノイズを排除し、SciPyの解析的微分(dx, dy)を直接使用
+        c = self.c_spline(r_clip, z_clip, grid=False).item()
+        dc_dr = self.c_spline(r_clip, z_clip, dx=1, dy=0, grid=False).item()
+        dc_dz = self.c_spline(r_clip, z_clip, dx=0, dy=1, grid=False).item()
         
-        # 1階微分（中心差分）
-        c_r_plus = self.c_spline(r + dr, z, grid=False).item()
-        c_r_minus = self.c_spline(r - dr, z, grid=False).item()
-        dc_dr = (c_r_plus - c_r_minus) / (2 * dr)
-        
-        c_z_plus = self.c_spline(r, z + dz, grid=False).item()
-        c_z_minus = self.c_spline(r, z - dz, grid=False).item()
-        dc_dz = (c_z_plus - c_z_minus) / (2 * dz)
-        
-        # 2階微分（中心差分）
-        c_rr = (c_r_plus - 2*c + c_r_minus) / (dr**2)
-        c_zz = (c_z_plus - 2*c + c_z_minus) / (dz**2)
-        
-        c_rz_pp = self.c_spline(r + dr, z + dz, grid=False).item()
-        c_rz_mm = self.c_spline(r - dr, z - dz, grid=False).item()
-        c_rz_pm = self.c_spline(r + dr, z - dz, grid=False).item()
-        c_rz_mp = self.c_spline(r - dr, z + dz, grid=False).item()
-        c_rz = (c_rz_pp - c_rz_mp - c_rz_pm + c_rz_mm) / (4 * dr * dz)
+        c_rr = self.c_spline(r_clip, z_clip, dx=2, dy=0, grid=False).item()
+        c_zz = self.c_spline(r_clip, z_clip, dx=0, dy=2, grid=False).item()
+        c_rz = self.c_spline(r_clip, z_clip, dx=1, dy=1, grid=False).item()
         
         return c, dc_dr, dc_dz, c_rr, c_zz, c_rz
 
     def ray_odes(self, s, Y):
-        """
-        運動学的＋動的音線方程式 (Kinematic & Dynamic Ray Equations)
-        Y = [r, z, pr, pz, tau, q_R, q_I, p_R, p_I]
-        """
         r, z, pr, pz, tau, q_R, q_I, p_R, p_I = Y
         c, dc_dr, dc_dz, c_rr, c_zz, c_rz = self.get_c_and_gradients(r, z)
 
-        # --- 運動学の方程式 (軌跡) ---
         dr_ds = c * pr
         dz_ds = c * pz
         dpr_ds = - (1.0 / c**2) * dc_dr
         dpz_ds = - (1.0 / c**2) * dc_dz
         dtau_ds = 1.0 / c
 
-        # --- 動的方程式 (ビームの広がり q とその微分 p) ---
-        # 法線ベクトル成分
         nr = -c * pz
         nz = c * pr
-        # 音線に垂直な方向の音速の2階微分 (c_nn)
         c_nn = c_rr * nr**2 + 2 * c_rz * nr * nz + c_zz * nz**2
 
         dqR_ds = c * p_R
@@ -77,7 +67,6 @@ class GaussianBeamPropagator:
         return [dr_ds, dz_ds, dpr_ds, dpz_ds, dtau_ds, dqR_ds, dqI_ds, dpR_ds, dpI_ds]
 
     def shoot_ray(self, start_pos, AoD_deg, max_range):
-        """特定の放出角(AoD)で音線を撃ち、軌跡とビームパラメータを計算"""
         r0, z0 = start_pos
         theta0 = np.radians(AoD_deg)
         c0, _, _, _, _, _ = self.get_c_and_gradients(r0, z0)
@@ -85,8 +74,6 @@ class GaussianBeamPropagator:
         pr0 = np.cos(theta0) / c0
         pz0 = np.sin(theta0) / c0
 
-        # ガウシアンビームの初期条件 (q(0)=1, p(0)=i 等)
-        # q_R, q_I, p_R, p_I
         q0_R, q0_I = 1.0, 0.0
         p0_R, p0_I = 0.0, 1.0
 
@@ -124,12 +111,10 @@ class GaussianBeamPropagator:
                 
                 if len(events[2]) > 0: # Target
                     break
-                
                 elif len(events[0]) > 0: # Surface
                     Y0 = sol.y[:, -1].copy()
                     Y0[1] = 0.0  
                     Y0[3] = -Y0[3] 
-                
                 elif len(events[1]) > 0: # Bottom
                     Y0 = sol.y[:, -1].copy()
                     r_col = Y0[0]
@@ -152,7 +137,6 @@ class GaussianBeamPropagator:
         return trajectories, AoD_deg
 
     def calculate_contribution(self, trajectories, rx_pos, beam_width_threshold=30.0):
-        """レシーバーへの近接判定と、ガウシアンエンベロープに基づく振幅計算"""
         min_dist = float('inf')
         closest_idx = 0
         best_sol = None
@@ -176,7 +160,6 @@ class GaussianBeamPropagator:
         closest_tau = 0.0
         
         if is_hit and best_sol is not None:
-            # 近接点でのパラメータ抽出
             r_c = best_sol.y[0, closest_idx]
             z_c = best_sol.y[1, closest_idx]
             closest_tau = best_sol.y[4, closest_idx]
@@ -187,14 +170,10 @@ class GaussianBeamPropagator:
             
             c_local, _, _, _, _, _ = self.get_c_and_gradients(r_c, z_c)
             
-            # 複素数化
             q = complex(q_R, q_I)
             p = complex(p_R, p_I)
             
-            # ガウシアンビーム振幅方程式: A ~ sqrt(c / |q|) * exp(-0.5 * omega * Im(p/q) * n^2)
-            # nは中心音線からの法線距離(≒min_dist)
             imag_pq = np.imag(p / q)
-            # 物理的に発散しないようエンベロープを保証
             if imag_pq < 0: imag_pq = 0 
             
             geom_spreading = np.sqrt(c_local / max(abs(q), 1e-10))
@@ -207,10 +186,14 @@ class GaussianBeamPropagator:
 def run_test():
     print("=== Gaussian Beam Tracer (Dynamic Ray Equations) ===")
     
-    ranges = np.array([0.0, 1000.0, 2000.0])
-    depths = np.array([0.0, 20.0, 100.0, 2000.0])
-    base_ssp = [1500.0, 1495.0, 1490.0, 1510.0]
-    c_grid = np.array([base_ssp, [1502.0, 1496.0, 1491.0, 1512.0], base_ssp])
+    # 3次スプライン(kx=3)には各次元4点以上のデータが必要
+    ranges = np.array([0.0, 1000.0, 2000.0, 3000.0])
+    depths = np.array([0.0, 20.0, 100.0, 500, 2000.0])
+    
+    # 屈折が視覚的に分かりやすいよう、サウンドチャネルをやや強調
+    base_ssp = [1510.0, 1490.0, 1470.0, 1500, 1530.0]
+    c_grid = np.array([base_ssp, base_ssp, base_ssp, base_ssp])
+     # c_grid = np.array([base_ssp, [1512.0, 1492.0, 1472.0, 1500, 1532.0], base_ssp, base_ssp])
     
     bottom_ranges = np.array([0.0, 1000.0, 2000.0, 3000.0])
     bottom_depths = np.array([1500.0, 1500.0, 1500.0, 1500.0])
@@ -219,10 +202,10 @@ def run_test():
     end_pos = (2000.0, 100.0)
     target_range = 2500.0
     
-    # 1kHzの音源としてインスタンス化
     model = GaussianBeamPropagator(ranges, depths, c_grid, bottom_ranges, bottom_depths, freq=1000.0)
     
-    test_angles = np.linspace(-15, 15, 15) # 音線を少し増やす
+    # ダクトを捉えるため、やや浅い角度を中心に放射
+    test_angles = np.linspace(-12, 12, 19) 
     
     fig, ax = plt.subplots(figsize=(10, 6))
     
